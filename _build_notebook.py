@@ -281,6 +281,68 @@ fig.suptitle(f"E={P0[0]:.0f}, A={P0[1]}, B={P0[2]}, \u03c6={np.rad2deg(P0[3]):.1
 plt.tight_layout(); plt.show()\
 '''))
 
+# ---- NEW: Model explanation & parameter sensitivity ----
+cells.append(md("""\
+### 5.1 Understanding the Model Terms
+
+The model encodes how starch\u2019s nonlinear optical response depends on polarization:
+
+| Term | Expression | Physical Meaning |
+|------|-----------|------------------|
+| **Baseline** | $\\sin^2(2(\\varphi - \\alpha))$ | Off-diagonal susceptibility tensor elements. Produces the characteristic **four-lobed** polar pattern. |
+| **Modulation** | $[A\\sin(\\cdot) + B\\cos(\\cdot)]^2$ | Ratio of diagonal to off-diagonal susceptibility components. $A$ and $B$ encode different tensor ratios. |
+| **Phase $\\varphi$** | Orientation angle | Direction of crystalline molecular chains. Mapping $\\varphi$ reveals the **radial organization** of amylopectin in the starch granule. |
+| **Scale $E$** | Amplitude factor | Proportional to squared incident field and overall nonlinear susceptibility magnitude. |
+
+> **Why swap when $A > B$?** The model has a symmetry: swapping $A \\leftrightarrow B$ and shifting
+> $\\varphi$ by $\\pi/2$ yields the same curve. The convention $A \\leq B$ removes this
+> degeneracy so that $\\varphi$ consistently encodes the physical orientation.\
+"""))
+
+cells.append(code('''\
+# Parameter sensitivity: how each parameter reshapes the SHG curve
+alpha_s = np.linspace(0, 2 * np.pi, 360)
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+# --- E (scaling) ---
+ax = axes[0, 0]
+for Ev in [2000, 5000, 10000, 30000]:
+    ax.plot(np.rad2deg(alpha_s), shg_model(alpha_s, Ev, 1, 5, np.pi/4),
+            lw=2, label=f'E={Ev:,}')
+ax.set_title("Effect of E (scaling)", fontweight='bold')
+ax.set_xlabel("\u03b1 (\u00b0)"); ax.set_ylabel("Intensity"); ax.legend()
+
+# --- A ---
+ax = axes[0, 1]
+for Av in [0.2, 0.5, 1.0, 3.0]:
+    ax.plot(np.rad2deg(alpha_s), shg_model(alpha_s, 10000, Av, 5, np.pi/4),
+            lw=2, label=f'A={Av}')
+ax.set_title("Effect of A", fontweight='bold')
+ax.set_xlabel("\u03b1 (\u00b0)"); ax.set_ylabel("Intensity"); ax.legend()
+
+# --- B ---
+ax = axes[1, 0]
+for Bv in [1, 3, 5, 9]:
+    ax.plot(np.rad2deg(alpha_s), shg_model(alpha_s, 10000, 1, Bv, np.pi/4),
+            lw=2, label=f'B={Bv}')
+ax.set_title("Effect of B", fontweight='bold')
+ax.set_xlabel("\u03b1 (\u00b0)"); ax.set_ylabel("Intensity"); ax.legend()
+
+# --- phi (orientation) ---
+ax = axes[1, 1]
+for pv in [0, np.pi/6, np.pi/4, np.pi/3, np.pi/2]:
+    ax.plot(np.rad2deg(alpha_s), shg_model(alpha_s, 10000, 1, 5, pv),
+            lw=2, label=f'\u03c6={np.rad2deg(pv):.0f}\u00b0')
+ax.set_title("Effect of \u03c6 (orientation)", fontweight='bold')
+ax.set_xlabel("\u03b1 (\u00b0)"); ax.set_ylabel("Intensity"); ax.legend()
+
+fig.suptitle("Parameter Sensitivity Analysis\\n"
+             "Each panel varies one parameter while others stay at initial-guess values",
+             fontsize=14, fontweight='bold')
+plt.tight_layout(); plt.show()\
+'''))
+
 # ----------------------------------------------------------------
 # 8. SINGLE PIXEL ANALYSIS
 # ----------------------------------------------------------------
@@ -540,7 +602,7 @@ for ax, (data, name, color, fmt) in zip(axes.flat, [
     (E_map[valid],              "E (scaling)",  'steelblue',    '.1f'),
     (A_map[valid],              "A",            'coral',        '.4f'),
     (B_map[valid],              "B",            'mediumseagreen','.4f'),
-    (np.rad2deg(phi_map[valid]),"\\u03c6 (\\u00b0)", 'mediumpurple', '.1f'),
+    (np.rad2deg(phi_map[valid]),"\u03c6 (\u00b0)", 'mediumpurple', '.1f'),
 ]):
     mu, sigma = np.mean(data), np.std(data)
     ax.hist(data, bins=100, color=color, edgecolor='white', alpha=0.85)
@@ -592,6 +654,59 @@ n = len(r2v)
 for t in [0.99, 0.95, 0.90, 0.80]:
     k = int(np.sum(r2v > t))
     print(f"  R\u00b2 > {t:.2f} : {k:6,} / {n:,}  ({100*k/n:5.1f} %)")\
+'''))
+
+# ---- NEW: Pixel Explorer ----
+cells.append(md("""\
+### 8.4 Pixel Explorer
+
+After the full-image fit, use `explore_pixel(row, col)` to inspect **any pixel\u2019s**
+fit and parameters. Modify the coordinates below to explore different regions.\
+"""))
+
+cells.append(code('''\
+def explore_pixel(row, col):
+    """Show the SHG fit for any pixel after full-image analysis."""
+    if np.isnan(E_map[row, col]):
+        print(f"\u26a0 Pixel ({row}, {col}) was not fitted (background or failed)")
+        return
+
+    E_px, A_px   = E_map[row, col], A_map[row, col]
+    B_px, phi_px = B_map[row, col], phi_map[row, col]
+    r2_px        = r2_map[row, col]
+    pix          = stack[:, row, col]
+
+    af = np.linspace(0, 2 * np.pi, 720)
+    If = shg_model(af, E_px, A_px, B_px, phi_px)
+
+    fig = plt.figure(figsize=(16, 5))
+
+    ax1 = fig.add_subplot(1, 3, 1, projection='polar')
+    ax1.plot(ALPHA_RAD, pix, 'ko', ms=5, label='Data', zorder=5)
+    ax1.plot(af, If, 'r-', lw=2, label='Fit', zorder=4)
+    ax1.set_title(f"Pixel ({row}, {col})\\nR\u00b2={r2_px:.4f}", pad=20, fontweight='bold')
+    ax1.legend(bbox_to_anchor=(1.3, 1.1))
+
+    ax2 = fig.add_subplot(1, 3, 2)
+    ax2.plot(ALPHA_DEG, pix, 'ko', ms=6, label='Data')
+    ax2.plot(np.rad2deg(af), If, 'r-', lw=2, label='Fit')
+    ax2.set_xlabel("\u03b1 (\u00b0)"); ax2.set_ylabel("Intensity")
+    ax2.set_title("Cartesian fit", fontweight='bold')
+    ax2.set_xlim(-5, 365); ax2.set_xticks(np.arange(0, 361, 45))
+    ax2.legend()
+
+    ax3 = fig.add_subplot(1, 3, 3)
+    ax3.imshow(np.rad2deg(phi_map), cmap='hsv', vmin=0, vmax=180)
+    ax3.plot(col, row, 'c+', ms=20, mew=3)
+    ax3.set_title("Location on \u03c6 map", fontweight='bold')
+    ax3.axis('off')
+
+    plt.tight_layout(); plt.show()
+    print(f"E={E_px:.2f}  A={A_px:.4f}  B={B_px:.4f}  "
+          f"\u03c6={phi_px:.4f} rad ({np.rad2deg(phi_px):.1f}\u00b0)  R\u00b2={r2_px:.4f}")
+
+# \u25b6 Change coordinates to explore different pixels:
+explore_pixel(height // 2, width // 2)\
 '''))
 
 # ----------------------------------------------------------------
